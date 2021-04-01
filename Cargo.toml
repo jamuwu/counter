@@ -1,0 +1,17 @@
+[package]
+name = "counter"
+version = "0.1.0"
+authors = ["Jamuwu <jamesguessis@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+env_logger = "0.8"
+log = "0.4"
+pixels = "0.2"
+winit = "0.24"
+winit_input_helper = "0.9"
+image = "0.23"
+scrap = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser"] }
