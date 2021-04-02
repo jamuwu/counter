@@ -58,7 +58,6 @@ fn main() -> Result<(), Error> {
   let mut app = Counter::new();
 
   event_loop.run(move |event, _, control_flow| {
-    // Draw the current frame
     if let Event::RedrawRequested(_) = event {
       app.draw(pixels.get_frame());
       if pixels
@@ -71,9 +70,7 @@ fn main() -> Result<(), Error> {
       }
     }
 
-    // Handle input events
     if input.update(&event) {
-      // Update internal state and request a redraw
       app.update();
       window.request_redraw();
     }
@@ -82,25 +79,42 @@ fn main() -> Result<(), Error> {
 
 struct Template {
   pixels: Vec<u8>,
-  width: i32,
-  height: i32,
+  width: i16,
+  height: i16,
 }
 
 struct Counter {
   tmpl: Option<Template>,
   actv: bool,
-  bar_x: i32,
-  bar_y: i32,
+  bar_x: i16,
+  bar_y: i16,
+  bar_w: i16,
+  bar_h: i16,
 }
 
 impl Counter {
-  /// Create a new `World` instance that can draw a moving box.
   fn new() -> Self {
     Self {
       tmpl: None,
       actv: false,
       bar_x: 0,
       bar_y: 0,
+      bar_w: 0,
+      bar_h: 0,
+    }
+  }
+
+  fn get_cropped(&self, frame: &[u8], n: &mut Vec<u8>) {
+    for (i, p) in frame.chunks_exact(4).enumerate() {
+      let x = (i % self.tmpl.as_ref().unwrap().height as usize) as i16;
+      let y = (i / self.tmpl.as_ref().unwrap().width as usize) as i16;
+
+      if x >= self.bar_x && x < self.bar_x + self.bar_h
+        && y >= self.bar_y && y < self.bar_y + self.bar_w {
+        for c in p {
+          n.push(*c);
+        }
+      }
     }
   }
 
@@ -118,7 +132,6 @@ impl Counter {
     return score as f64 * 100.0 / (255.0 * 3.0 * (w * h) as f64)
   }
 
-  /// Update the `World` internal state; bounce the box around the screen.
   fn update(&mut self) {
     let x = get_active_window();
     if x == "PokeMMO" {
