@@ -4,8 +4,6 @@ use winit::dpi::{PhysicalPosition, LogicalSize};
 use winit::event::Event;
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
-use winit_input_helper::WinitInputHelper;
-use image::{GenericImage, GenericImageView, Rgba};
 use scrap::{Capturer, Display};
 
 
@@ -37,18 +35,18 @@ fn get_active_window() -> String {
 fn main() -> Result<(), Error> {
   env_logger::init();
   let event_loop = EventLoop::new();
-  let mut input = WinitInputHelper::new();
   let window = WindowBuilder::new()
     .with_decorations(false)
     .with_transparent(true)
     .with_inner_size(LogicalSize::new(300.0, 100.0))
     .with_resizable(false)
     .with_always_on_top(true)
+    .with_title("PokeMMO Counter")
     .build(&event_loop)
     .unwrap();
 
-  let w = window.primary_monitor().unwrap().size().width / 2 - 100;
-  window.set_outer_position(PhysicalPosition {x: w, y: 10});
+  let w = window.primary_monitor().unwrap().size().width - 300;
+  window.set_outer_position(PhysicalPosition {x: w, y: 22});
 
   let mut pixels = {
     let window_size = window.inner_size();
@@ -57,9 +55,10 @@ fn main() -> Result<(), Error> {
   };
   let mut app = Counter::new();
 
+  let mut visible = true;
+
   event_loop.run(move |event, _, control_flow| {
     if let Event::RedrawRequested(_) = event {
-      app.draw(pixels.get_frame());
       if pixels
         .render()
         .map_err(|e| error!("pixels.render() failed: {}", e))
@@ -68,77 +67,76 @@ fn main() -> Result<(), Error> {
         *control_flow = ControlFlow::Exit;
         return;
       }
+      app.draw(pixels.get_frame());
     }
 
-    if input.update(&event) {
-      app.update();
-      window.request_redraw();
+    app.update();
+    window.request_redraw();
+    if app.actv != visible {
+      visible = app.actv;
+      window.set_minimized(!app.actv);
     }
   });
 }
 
-struct Template {
-  pixels: Vec<u8>,
-  width: i16,
-  height: i16,
+#[derive(Copy, Clone)]
+struct Color {
+  r: u8,
+  g: u8,
+  b: u8,
+}
+
+impl Color {
+  fn compare(&self, p: &[u8]) -> bool {
+    let r = self.r as i16 <= p[2] as i16 + 10 && self.r as i16 >= p[2] as i16 - 10;
+    let g = self.g as i16 <= p[1] as i16 + 10 && self.g as i16 >= p[1] as i16 - 10;
+    let b = self.b as i16 <= p[0] as i16 + 10 && self.b as i16 >= p[0] as i16 - 10;
+    return r && g && b
+  }
 }
 
 struct Counter {
-  tmpl: Option<Template>,
   actv: bool,
-  bar_x: i16,
-  bar_y: i16,
-  bar_w: i16,
-  bar_h: i16,
+  color: Color,
+  count: u8,
+  height: i16,
+  width: i16,
+  capturer: Capturer,
 }
 
 impl Counter {
   fn new() -> Self {
+    let display = Display::primary().expect("Couldn't find primary display.");
     Self {
-      tmpl: None,
       actv: false,
-      bar_x: 0,
-      bar_y: 0,
-      bar_w: 0,
-      bar_h: 0,
+      color: Color{r: 132, g: 209, b: 142},
+      count: 0,
+      height: 1080,
+      width: 1920,
+      capturer: Capturer::new(display).expect("Couldn't begin capture."),
     }
-  }
-
-  fn get_cropped(&self, frame: &[u8], n: &mut Vec<u8>) {
-    for (i, p) in frame.chunks_exact(4).enumerate() {
-      let x = (i % self.tmpl.as_ref().unwrap().height as usize) as i16;
-      let y = (i / self.tmpl.as_ref().unwrap().width as usize) as i16;
-
-      if x >= self.bar_x && x < self.bar_x + self.bar_h
-        && y >= self.bar_y && y < self.bar_y + self.bar_w {
-        for c in p {
-          n.push(*c);
-        }
-      }
-    }
-  }
-
-  fn diff(&self, frame: &mut [u8]) -> f64 {
-    let mut score = 0;
-    let w = self.tmpl.as_ref().unwrap().width;
-    let h = self.tmpl.as_ref().unwrap().height;
-    let px = &self.tmpl.as_ref().unwrap().pixels;
-    let fx = frame.chunks_exact(4);
-    for (p1, p2) in px.chunks_exact(4).zip(fx) {
-      score += (p1[0] as i32 - p2[0] as i32).abs() +
-        (p1[1] as i32 - p2[1] as i32).abs() +
-        (p1[2] as i32 - p2[2] as i32).abs()
-    }
-    return score as f64 * 100.0 / (255.0 * 3.0 * (w * h) as f64)
   }
 
   fn update(&mut self) {
     let x = get_active_window();
-    if x == "PokeMMO" {
+    if x == "PokeMMO" || x == "PokeMMO Counter" {
       if !self.actv {
         self.actv = true;
         println!("PokeMMO Refocused.");
-      }
+      }  
+      // Wait until there's a frame
+      let buffer = match self.capturer.frame() {
+        Ok(buffer) => buffer,
+        Err(error) => {
+          if error.kind() == std::io::ErrorKind::WouldBlock {
+            // Keep spinning
+            return;
+          } else {
+            panic!("Error: {}", error);
+          }
+        }
+      };
+      self.count = detect(&buffer, self.color, self.width as usize, self.height as usize);
     } else {
       if self.actv {
         self.actv = false;
@@ -151,7 +149,50 @@ impl Counter {
 
   fn draw(&self, frame: &mut [u8]) {
     for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {
-      pixel.copy_from_slice(&[0x5e, 0x48, 0xe8, 0xff]);
+      pixel.copy_from_slice(&[0x00, 0xFF, 0xC0, 0x0F]);
     }
   }
+}
+
+fn detect(frame: &scrap::Frame, c: Color, w: usize, h: usize) -> u8 {
+  let mut frame = frame.to_vec();
+  let mut n = 0;
+  let mut y = 0;
+  let mut count = 0;
+  let s = frame.len() / h;
+  while y < h {
+    let prev = n;
+    let mut found = false;
+    let mut x = 0;
+    while x < w {
+      let i = s * y + 4 * x;
+      if c.compare(&frame[i..i+3]) {
+        frame[i] = 0;
+        frame[i+1] = 0;
+        frame[i+2] = 0;
+        if !found {
+          count = 1;
+          found = true;
+        } else {
+          count += 1;
+        }
+      } else {
+        if found {
+          if count >= 100 {
+            n += 1;
+          }
+        }
+        found = false;
+        count = 0;
+      }
+      x += 1;
+    }
+    if prev != n {
+      y += 5;
+    } else {
+      y += 1;
+    }
+  }
+  println!("Got {} matches", n);
+  n
 }
