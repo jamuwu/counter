@@ -7,7 +7,7 @@ use winit::window::WindowBuilder;
 use scrap::{Capturer, Display};
 
 
-#[cfg(linux)]
+#[cfg(target_os = "linux")]
 fn get_active_window() -> String {
   // Can't find how to get window
   // Titles on linux, so for now
@@ -15,7 +15,7 @@ fn get_active_window() -> String {
   String::new("PokeMMO Counter")
 }
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 fn get_active_window() -> String {
   let x = unsafe {winapi::um::winuser::GetForegroundWindow()};
   let mut b = [0u16; 1024];
