@@ -12,7 +12,7 @@ fn get_active_window() -> String {
   // Can't find how to get window
   // Titles on linux, so for now
   // We'll waste your cpu cycles
-  String::new("PokeMMO Counter")
+  String::from("PokeMMO Counter")
 }
 
 #[cfg(target_os = "windows")]
