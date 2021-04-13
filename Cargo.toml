@@ -10,6 +10,8 @@ log = "0.4"
 pixels = "0.2"
 winit = {git = "https://github.com/rust-windowing/winit"}
 scrap = "0.5"
+rusttype = "0.9"
+image = "0.23"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser"] }

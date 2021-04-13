@@ -4,14 +4,16 @@ use winit::dpi::{PhysicalPosition, LogicalSize};
 use winit::event::Event;
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
+use image::imageops::FilterType::Gaussian;
 use scrap::{Capturer, Display};
+use rusttype::{point, Font, Scale};
+use std::time::{Duration, Instant};
 
+mod pokemon;
 
 #[cfg(target_os = "linux")]
 fn get_active_window() -> String {
-  // Can't find how to get window
-  // Titles on linux, so for now
-  // We'll waste your cpu cycles
+  // How do I do the same on linux?
   String::from("PokeMMO Counter")
 }
 
@@ -53,8 +55,8 @@ fn main() -> Result<(), Error> {
     .build(&event_loop)
     .unwrap();
 
-  let w = window.primary_monitor().unwrap().size().width - 300;
-  window.set_outer_position(PhysicalPosition {x: w, y: 22});
+  let w = window.primary_monitor().unwrap().size().width - 600;
+  window.set_outer_position(PhysicalPosition {x: w, y: 24});
 
   let mut pixels = {
     let window_size = window.inner_size();
@@ -67,6 +69,7 @@ fn main() -> Result<(), Error> {
 
   event_loop.run(move |event, _, control_flow| {
     if let Event::RedrawRequested(_) = event {
+      app.draw(pixels.get_frame());
       if pixels
         .render()
         .map_err(|e| error!("pixels.render() failed: {}", e))
@@ -75,7 +78,6 @@ fn main() -> Result<(), Error> {
         *control_flow = ControlFlow::Exit;
         return;
       }
-      app.draw(pixels.get_frame());
     }
 
     app.update();
@@ -101,18 +103,36 @@ impl Color {
     let b = self.b as i16 <= p[0] as i16 + 10 && self.b as i16 >= p[0] as i16 - 10;
     return r && g && b
   }
+
+  fn blend(&self, p: &[u8]) -> [u8; 4] {
+    // https://github.com/abonander/rust-image/blob/master/src/color.rs#L420
+    let (br, bg, bb, ba) = (self.r as f32 / 255.0, self.g as f32 / 255.0, self.b as f32 / 255.0, 1.0);
+    let (fr, fg, fb, fa) = (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, p[3] as f32 / 255.0);
+    let alpha_final = ba + fa - ba * fa;
+    let (br_a, bg_a, bb_a) = (br * ba, bg * ba, bb * ba);
+    let (fr_a, fg_a, fb_a) = (fr * fa, fg * fa, fb * fa);
+    let (out_r_a, out_g_a, out_b_a) = (fr_a + br_a * (1.0 - fa), fg_a + bg_a * (1.0 - fa), fb_a + bb_a * (1.0 - fa));
+    let (out_r, out_g, out_b) = (out_r_a / alpha_final, out_g_a / alpha_final, out_b_a / alpha_final);
+    [(255.0 * out_r) as u8, (255.0 * out_g) as u8, (255.0 * out_b) as u8, (255.0 * alpha_final) as u8]
+  }
 }
 
-struct Counter {
+struct Counter<'a> {
   actv: bool,
   color: Color,
   count: u8,
   height: i16,
   width: i16,
+  mon: usize,
+  gif: Vec<image::Frame>,
+  gif_i: usize,
+  gif_t: Instant,
+  encounters: u128,
+  font: Font<'a>,
   capturer: Capturer,
 }
 
-impl Counter {
+impl Counter<'_> {
   fn new() -> Self {
     let display = Display::primary().expect("Couldn't find primary display.");
     Self {
@@ -121,12 +141,24 @@ impl Counter {
       count: 0,
       height: 1080,
       width: 1920,
+      mon: pokemon::get("Sneasel"),
+      gif: pokemon::gif("Sneasel"),
+      gif_i: 0,
+      gif_t: Instant::now(),
+      encounters: 29999,
+      font: Font::try_from_bytes(include_bytes!("font.ttf")).expect("Couldn't load font."),
       capturer: Capturer::new(display).expect("Couldn't begin capture."),
     }
   }
 
   fn update(&mut self) {
-    let x = get_active_window();
+    let (n, d) = self.gif[self.gif_i].delay().numer_denom_ms();
+    if self.gif_t.elapsed() >= Duration::from_millis((n / d).into()) {
+      self.gif_i += 1;
+      self.gif_i %= self.gif.len();
+      self.gif_t = Instant::now();
+    }
+    let x = "PokeMMO"; //get_active_window();
     if x == "PokeMMO" || x == "PokeMMO Counter" {
       if !self.actv {
         self.actv = true;
@@ -151,13 +183,63 @@ impl Counter {
         println!("PokeMMO Unfocused.");
       }
     }
-    // TODO take screenshot and detect hp bars
-    // TODO handle clicking on gif, but only the gif, if it's even a pixel off ignore that shit
+    // TODO handle clicking on gif, left click to increment, right click to decrement
+    // TODO if the pokemon name is clicked, open scrollable menu to change current pokemon
   }
 
   fn draw(&self, frame: &mut [u8]) {
-    for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {
-      pixel.copy_from_slice(&[0x00, 0xFF, 0xC0, 0x0F]);
+    // self.text(frame, &self.mon.name, 180, 0);
+    self.text(frame, "Encounters", 18.0, 180, 5);
+    self.text(frame, &format!("{}", self.encounters), 32.0, 180, 17);
+    self.text(frame, "Insanity", 18.0, 180, 44);
+    self.text(frame, &format!("{:.2}%", insanity(self.encounters)),32.0, 180, 56);
+    let mon = &self.gif[self.gif_i];
+    let mon = image::DynamicImage::ImageRgba8(mon.clone().into_buffer());
+    let mon = mon.resize_to_fill(90, 90, Gaussian).to_rgba8();
+    let mut x = 0;
+    let mut y = 0;
+    for p in mon.pixels() {
+      if x < mon.width() as usize {
+        let i = ((y + 5) * 300 + x + 205) * 4;
+        frame[i..i + 4].copy_from_slice(
+          &Color{r: 0, g: 0, b: 0}.blend(&[p[0], p[1], p[2], p[3]])
+        );
+        x += 1;
+      } else {
+        x = 1;
+        y += 1;
+      }
+    }
+  }
+
+  fn text(&self, frame: &mut [u8], string: &str, scale: f32, offset_x: usize, offset_y: usize) {
+    let scale = Scale::uniform(scale);
+    let v_metrics = self.font.v_metrics(scale);
+    let glyphs: Vec<_> = self.font
+      .layout(string, scale, point(5.0, 5.0 + v_metrics.ascent))
+      .collect();
+    let gw = {
+      let min_x = glyphs
+        .first()
+        .map(|g| g.pixel_bounding_box().unwrap().min.x)
+        .unwrap();
+      let max_x = glyphs
+        .last()
+        .map(|g| g.pixel_bounding_box().unwrap().max.x)
+        .unwrap();
+      (max_x - min_x) as usize
+    };
+    for glyph in glyphs {
+      if let Some(bounding_box) = glyph.pixel_bounding_box() {
+        glyph.draw(|x, y, v| {
+          let x = x as usize + bounding_box.min.x as usize + (offset_x - gw);
+          let y = y as usize + bounding_box.min.y as usize + offset_y;
+          let i = (y * 300 + x) * 4;
+          frame[i..i + 4].copy_from_slice(
+            &Color{r: 0, g: 0, b: 0}.blend(&[0xFF, 0xFF, 0xFF, (v * 255.0) as u8])
+          );
+        });
+      }
     }
   }
 }
@@ -201,6 +283,10 @@ fn detect(frame: &scrap::Frame, c: Color, w: usize, h: usize) -> u8 {
       y += 1;
     }
   }
-  println!("Got {} matches", n);
+  // println!("Got {} matches", n);
   n
+}
+
+fn insanity(e: u128) -> f64 {
+  (1.0 - (1.0 - (1.0 / 30000.0f64)).powf(e as f64)) * 100.0
 }
