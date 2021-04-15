@@ -1,15 +1,18 @@
 use log::error;
 use pixels::{Error, Pixels, SurfaceTexture};
 use winit::dpi::{PhysicalPosition, LogicalSize};
-use winit::event::Event;
+use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use image::imageops::FilterType::Gaussian;
 use scrap::{Capturer, Display};
 use rusttype::{point, Font, Scale};
-use std::time::{Duration, Instant};
 
 mod pokemon;
+use pokemon::Pokemon;
+
+mod gif;
+use gif::Gif;
 
 #[cfg(target_os = "linux")]
 fn get_active_window() -> String {
@@ -68,6 +71,11 @@ fn main() -> Result<(), Error> {
   let mut visible = true;
 
   event_loop.run(move |event, _, control_flow| {
+    if let Event::WindowEvent{event: WindowEvent::CloseRequested, ..} = event {
+      *control_flow = ControlFlow::Exit;
+      return;
+    }
+
     if let Event::RedrawRequested(_) = event {
       app.draw(pixels.get_frame());
       if pixels
@@ -120,13 +128,12 @@ impl Color {
 struct Counter<'a> {
   actv: bool,
   color: Color,
-  count: u8,
-  height: i16,
-  width: i16,
-  mon: usize,
-  gif: Vec<image::Frame>,
-  gif_i: usize,
-  gif_t: Instant,
+  count: usize,
+  height: usize,
+  width: usize,
+  low: usize,
+  mon: Pokemon,
+  gif: Gif,
   encounters: u128,
   font: Font<'a>,
   capturer: Capturer,
@@ -141,42 +148,42 @@ impl Counter<'_> {
       count: 0,
       height: 1080,
       width: 1920,
-      mon: pokemon::get("Sneasel"),
-      gif: pokemon::gif("Sneasel"),
-      gif_i: 0,
-      gif_t: Instant::now(),
-      encounters: 29999,
+      low: 1080,
+      mon: Pokemon::Sneasel,
+      gif: Gif::open(Pokemon::Sneasel),
+      encounters: 0,
       font: Font::try_from_bytes(include_bytes!("font.ttf")).expect("Couldn't load font."),
       capturer: Capturer::new(display).expect("Couldn't begin capture."),
     }
   }
 
   fn update(&mut self) {
-    let (n, d) = self.gif[self.gif_i].delay().numer_denom_ms();
-    if self.gif_t.elapsed() >= Duration::from_millis((n / d).into()) {
-      self.gif_i += 1;
-      self.gif_i %= self.gif.len();
-      self.gif_t = Instant::now();
-    }
-    let x = "PokeMMO"; //get_active_window();
+    let x = get_active_window();
     if x == "PokeMMO" || x == "PokeMMO Counter" {
+      self.gif.update();
       if !self.actv {
         self.actv = true;
         println!("PokeMMO Refocused.");
       }  
-      // Wait until there's a frame
       let buffer = match self.capturer.frame() {
         Ok(buffer) => buffer,
         Err(error) => {
           if error.kind() == std::io::ErrorKind::WouldBlock {
-            // Keep spinning
             return;
           } else {
             panic!("Error: {}", error);
           }
         }
       };
-      self.count = detect(&buffer, self.color, self.width as usize, self.height as usize);
+      let new = detect(&buffer, self.color, self.width, self.height, self.low);
+      if new.len() != self.count {
+        if self.count != 0 && new.len() != 0 && self.low == self.height {
+          self.low = new.iter().map(|x| x[1]).max().unwrap_or(0) - 10;
+        } else {
+          self.count = new.len();
+          self.encounters += new.len() as u128;
+        }
+      }
     } else {
       if self.actv {
         self.actv = false;
@@ -188,13 +195,14 @@ impl Counter<'_> {
   }
 
   fn draw(&self, frame: &mut [u8]) {
-    // self.text(frame, &self.mon.name, 180, 0);
+    for pixel in frame.chunks_exact_mut(4) {
+      pixel.copy_from_slice(&[0, 0, 0, 0]);
+    }
     self.text(frame, "Encounters", 18.0, 180, 5);
     self.text(frame, &format!("{}", self.encounters), 32.0, 180, 17);
     self.text(frame, "Insanity", 18.0, 180, 44);
     self.text(frame, &format!("{:.2}%", insanity(self.encounters)),32.0, 180, 56);
-    let mon = &self.gif[self.gif_i];
-    let mon = image::DynamicImage::ImageRgba8(mon.clone().into_buffer());
+    let mon = image::DynamicImage::ImageRgba8(self.gif.frame().into_buffer());
     let mon = mon.resize_to_fill(90, 90, Gaussian).to_rgba8();
     let mut x = 0;
     let mut y = 0;
@@ -244,14 +252,14 @@ impl Counter<'_> {
   }
 }
 
-fn detect(frame: &scrap::Frame, c: Color, w: usize, h: usize) -> u8 {
+fn detect(frame: &scrap::Frame, c: Color, w: usize, h: usize, l: usize) -> Vec<[usize; 2]> {
   let mut frame = frame.to_vec();
-  let mut n = 0;
+  let mut n: Vec<[usize; 2]> = vec![];
   let mut y = 0;
   let mut count = 0;
   let s = frame.len() / h;
-  while y < h {
-    let prev = n;
+  while y < h && y < l{
+    let prev = n.len();
     let mut found = false;
     let mut x = 0;
     while x < w {
@@ -268,8 +276,8 @@ fn detect(frame: &scrap::Frame, c: Color, w: usize, h: usize) -> u8 {
         }
       } else {
         if found {
-          if count >= 100 {
-            n += 1;
+          if count >= 50 {
+            n.push([x, y]);
           }
         }
         found = false;
@@ -277,7 +285,7 @@ fn detect(frame: &scrap::Frame, c: Color, w: usize, h: usize) -> u8 {
       }
       x += 1;
     }
-    if prev != n {
+    if prev != n.len() {
       y += 5;
     } else {
       y += 1;
