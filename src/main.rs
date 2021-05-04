@@ -4,7 +4,6 @@ use winit::dpi::{PhysicalPosition, LogicalSize};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
-use image::imageops::FilterType::Gaussian;
 use scrap::{Capturer, Display};
 use rusttype::{point, Font, Scale};
 
@@ -102,6 +101,7 @@ struct Color {
   r: u8,
   g: u8,
   b: u8,
+  a: u8,
 }
 
 impl Color {
@@ -114,7 +114,7 @@ impl Color {
 
   fn blend(&self, p: &[u8]) -> [u8; 4] {
     // https://github.com/abonander/rust-image/blob/master/src/color.rs#L420
-    let (br, bg, bb, ba) = (self.r as f32 / 255.0, self.g as f32 / 255.0, self.b as f32 / 255.0, 1.0);
+    let (br, bg, bb, ba) = (self.r as f32 / 255.0, self.g as f32 / 255.0, self.b as f32 / 255.0, self.a as f32 / 255.0);
     let (fr, fg, fb, fa) = (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, p[3] as f32 / 255.0);
     let alpha_final = ba + fa - ba * fa;
     let (br_a, bg_a, bb_a) = (br * ba, bg * ba, bb * ba);
@@ -142,17 +142,18 @@ struct Counter<'a> {
 impl Counter<'_> {
   fn new() -> Self {
     let display = Display::primary().expect("Couldn't find primary display.");
+    let mon = Pokemon::Charizard;
     Self {
       actv: false,
-      color: Color{r: 132, g: 209, b: 142},
+      color: Color{r: 132, g: 209, b: 142, a: 255},
       count: 0,
       height: 1080,
       width: 1920,
       low: 1080,
-      mon: Pokemon::Sneasel,
-      gif: Gif::open(Pokemon::Sneasel),
+      mon: mon,
+      gif: Gif::open(mon),
       encounters: 0,
-      font: Font::try_from_bytes(include_bytes!("font.ttf")).expect("Couldn't load font."),
+      font: Font::try_from_bytes(include_bytes!("Righteous.ttf")).expect("Couldn't load font."),
       capturer: Capturer::new(display).expect("Couldn't begin capture."),
     }
   }
@@ -202,15 +203,16 @@ impl Counter<'_> {
     self.text(frame, &format!("{}", self.encounters), 32.0, 180, 17);
     self.text(frame, "Insanity", 18.0, 180, 44);
     self.text(frame, &format!("{:.2}%", insanity(self.encounters)),32.0, 180, 56);
-    let mon = image::DynamicImage::ImageRgba8(self.gif.frame().into_buffer());
-    let mon = mon.resize_to_fill(90, 90, Gaussian).to_rgba8();
+    let mon = self.gif.frame();
+    let offset_y = (100 - mon.height() as usize) / 2;
+    let offset_x = 300 - mon.width() as usize;
     let mut x = 0;
     let mut y = 0;
     for p in mon.pixels() {
       if x < mon.width() as usize {
-        let i = ((y + 5) * 300 + x + 205) * 4;
+        let i = ((y + offset_y) * 300 + x + offset_x) * 4;
         frame[i..i + 4].copy_from_slice(
-          &Color{r: 0, g: 0, b: 0}.blend(&[p[0], p[1], p[2], p[3]])
+          &Color{r: 0, g: 0, b: 0, a: 0}.blend(&[p[0], p[1], p[2], p[3]])
         );
         x += 1;
       } else {
@@ -240,12 +242,14 @@ impl Counter<'_> {
     for glyph in glyphs {
       if let Some(bounding_box) = glyph.pixel_bounding_box() {
         glyph.draw(|x, y, v| {
-          let x = x as usize + bounding_box.min.x as usize + (offset_x - gw);
-          let y = y as usize + bounding_box.min.y as usize + offset_y;
-          let i = (y * 300 + x) * 4;
-          frame[i..i + 4].copy_from_slice(
-            &Color{r: 0, g: 0, b: 0}.blend(&[0xFF, 0xFF, 0xFF, (v * 255.0) as u8])
-          );
+          if v > 0.1 {
+            let x = x as usize + bounding_box.min.x as usize + (offset_x - gw);
+            let y = y as usize + bounding_box.min.y as usize + offset_y;
+            let i = (y * 300 + x) * 4;
+            frame[i..i + 4].copy_from_slice(
+              &Color{r: 0, g: 0, b: 0, a: 255}.blend(&[0xFF, 0xFF, 0xFF, (v * 255.0) as u8])
+            );
+          }
         });
       }
     }

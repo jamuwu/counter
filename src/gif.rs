@@ -1,9 +1,11 @@
 use image::{AnimationDecoder, codecs::gif::GifDecoder};
+use image::imageops::FilterType::Gaussian;
 use std::time::{Duration, Instant};
 use std::io::Cursor;
 
 pub struct Gif {
   frames: Vec<image::Frame>,
+  current: image::RgbaImage,
   instant: Instant,
   index: usize,
 }
@@ -669,6 +671,7 @@ impl Gif {
         let frames = decoder.into_frames();
         frames.collect_frames().unwrap()
       },
+      current: image::RgbaImage::new(90, 90),
       instant: Instant::now(),
       index: 0,
     }
@@ -680,10 +683,16 @@ impl Gif {
       self.index += 1;
       self.index %= self.frames.len();
       self.instant = Instant::now();
+      self.current = image::DynamicImage::ImageRgba8(self._frame().into_buffer())
+        .resize(90, 90, Gaussian).to_rgba8();
     }
   }
 
-  pub fn frame(&self) -> image::Frame {
+  pub fn frame(&self) -> &image::RgbaImage {
+    &self.current
+  }
+
+  pub fn _frame(&self) -> image::Frame {
     self.frames[self.index].clone()
   }
 }
