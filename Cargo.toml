@@ -1,0 +1,20 @@
+[package]
+name = "counter"
+version = "0.1.0"
+authors = ["Jamuwu <jamesguessis@gmail.com>"]
+edition = "2021"
+resolver = "2"
+
+[dependencies]
+bincode = "1.3"
+byteorder = "1"
+env_logger = "0.10"
+fontdue = "0.7"
+image = "0.24"
+lazy_static = "1.4"
+log = "0.4"
+pixels = "0.11"
+regex = "1.7"
+sled = "0.34"
+winit = { version = "0.27", features = ["serde"] }
+win-screenshot = "2"
